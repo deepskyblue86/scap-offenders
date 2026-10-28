@@ -12,6 +12,8 @@ User-facing commands and the JSON contract are documented in `README.md`.
 
 ## Development
 
+- Use Conventional Commits for commit messages: `<type>: <description>` or
+  `<type>(<scope>): <description>`, for example `feat: filter low-impact processes`.
 - Run the Python tests with `python3 -I -m unittest discover -s tests`.
 - Collector tests require LuaJIT; report tests require Node.js. Tests for a missing runtime are
   skipped.
