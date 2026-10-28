@@ -1,7 +1,7 @@
-"""Regression tests for the collector, scan failure handling and capture merging.
+"""Regression tests for the collector, scan failure handling and the report.
 
 The chisel tests drive chisels/top_offenders.lua under LuaJIT (the runtime sysdig uses) with mocked
-event fields; they are skipped when `luajit` is not on PATH.
+event fields; they are skipped when `luajit` is not on PATH. The report test needs `node`.
 """
 import json
 import os
@@ -17,6 +17,7 @@ sys.path.insert(0, ROOT)
 import offenders  # noqa: E402
 
 CHISEL = os.path.join(ROOT, "chisels", "top_offenders.lua")
+SMOKE = os.path.join(ROOT, "tests", "report_smoke.js")
 NS = 1_000_000_000
 
 
@@ -170,6 +171,38 @@ class Merge(unittest.TestCase):
         removed = offenders.removed(merged, ["a"])
         self.assertEqual(removed, [2, 1, 0, 0])
         self.assertEqual(names[0], "b")
+
+
+@unittest.skipUnless(shutil.which("node"), "node not installed")
+class Report(unittest.TestCase):
+    def render(self, data):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        src, out = os.path.join(d, "o.json"), os.path.join(d, "r.html")
+        with open(src, "w") as fh:
+            json.dump(data, fh)
+        subprocess.run([sys.executable, os.path.join(ROOT, "offenders.py"), "report", src, "-o", out,
+                        "--no-embed"], check=True, capture_output=True)
+        return out
+
+    def smoke(self, data, comm=None):
+        args = ["node", SMOKE, self.render(data)] + ([comm] if comm else [])
+        return json.loads(subprocess.run(args, check=True, capture_output=True, text=True).stdout)
+
+    def test_selection_updates_totals_and_snippet(self):
+        r = self.smoke(good_capture(), "a")
+        self.assertEqual(r["pct"], "100.0%")
+        self.assertIn("  - a", r["snippet"])
+        self.assertEqual(r["kept"], [0, 0])
+
+    def test_report_renders_when_no_event_has_a_known_process(self):
+        data = {"version": 2, "depth": 12, "start_sec": 1, "end_sec": 1, "events": 2, "total_sec": [2],
+                "chains_total": 1, "chains_listed": 1, "chains_dropped_events": 0, "comms": [],
+                "chains": [{"c": [], "n": 2, "sec": [2]}]}
+        r = self.smoke(data)
+        self.assertEqual(r["comms"], 0)
+        self.assertEqual(r["kept"], [2])
+        self.assertIn("nothing to skip", r["caveat"])
 
 
 if __name__ == "__main__":

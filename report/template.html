@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Capture offenders</title>
+__PLOTLY__
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 0; color: #1c2430; background: #f6f7f9; }
+  header { background: #0b1f3a; color: #fff; padding: 14px 24px; }
+  header h1 { margin: 0 0 4px; font-size: 20px; }
+  header .meta { opacity: .8; font-size: 13px; }
+  main { padding: 16px 24px 48px; max-width: 1400px; margin: 0 auto; }
+  .card { background: #fff; border: 1px solid #dde1e7; border-radius: 6px; padding: 14px 16px; margin-bottom: 16px; }
+  h2 { margin: 0 0 10px; font-size: 16px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #eceff3; vertical-align: top; }
+  th { position: sticky; top: 0; background: #fff; cursor: default; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.infra td, tr.generic td { color: #7a8493; }
+  .bar { height: 8px; background: #3b82f6; border-radius: 2px; min-width: 1px; }
+  .badge { display: inline-block; padding: 0 6px; border-radius: 9px; font-size: 11px; margin-left: 4px; }
+  .badge.infra { background: #fde2e2; color: #9b1c1c; }
+  .badge.generic { background: #fef0c7; color: #8a5a00; }
+  .badge.bursty { background: #e0ecff; color: #1d4ed8; }
+  .badge.cont { background: #e3f6e8; color: #166534; }
+  .cmd { font-family: ui-monospace, monospace; font-size: 12px; max-width: 460px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #summary { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+  #summary .big { font-size: 26px; font-weight: 600; }
+  pre { background: #0b1f3a; color: #e6edf7; padding: 10px 12px; border-radius: 4px; margin: 6px 0; min-width: 260px; }
+  button { font: inherit; padding: 4px 10px; border: 1px solid #b6bdc9; background: #fff; border-radius: 4px; cursor: pointer; }
+  button:hover { background: #eef2f7; }
+  ul.notes { margin: 6px 0 0 18px; padding: 0; }
+  ul.notes li { margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Capture offenders</h1>
+  <div class="meta" id="meta"></div>
+</header>
+<main>
+  <div class="card">
+    <h2>Selection</h2>
+    <div id="summary">
+      <div><div class="big" id="pct">0%</div><div>of events removed</div></div>
+      <div><div class="big" id="rate"></div><div>events/s before &rarr; after</div></div>
+      <div><div>skip_events_by_process:</div><pre id="snippet">(nothing selected)</pre>
+        <button id="copy">Copy</button> <button id="clear">Clear</button></div>
+    </div>
+    <div id="warn" style="color:#9b1c1c;margin-top:8px"></div>
+  </div>
+
+  <div class="card"><h2>Events per second</h2><div id="chart" style="height:340px"></div></div>
+
+  <div class="card">
+    <h2>Processes by subtree volume</h2>
+    <table id="tbl"><thead><tr>
+      <th></th><th>comm</th><th class="num">events</th><th class="num">share</th><th class="num">/s</th>
+      <th></th><th class="num" title="share of the 3 busiest seconds">peak</th><th class="num">self</th><th>active</th><th>example</th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>How to read this</h2>
+    <ul class="notes">
+      <li><b>Events</b> counts a process and everything it spawned (up to <span id="depth"></span> ancestor levels), because
+          <code>skip_events_by_process</code> also suppresses descendants. Subtrees overlap, so shares do not add up; the selection
+          total above is exact.</li>
+      <li>Names are the kernel <code>comm</code> (15 characters); they are what the agent matches.</li>
+      <li><span class="badge infra">infra</span> init, container runtimes and similar parents: skipping one hides the whole subtree
+          below it, which can be most of the node.</li>
+      <li><span class="badge generic">shared</span> shells, interpreters and common utilities: skipping one hides every process of that name on the host,
+          not only the noisy one.</li>
+      <li>Skipped processes are not visible to detections and metrics. Prefer the narrowest entry that covers the volume.</li>
+      <li>Numbers describe this capture window only; check that it is representative before applying the list.</li>
+    </ul>
+    <div id="caveat" style="margin-top:6px"></div>
+  </div>
+</main>
+
+<script>
+const D = __DATA__;
+const secs = D.total_sec.length;
+const total = D.events;
+const INFRA = /^(systemd|init|containerd.*|crio|conmon|dockerd|runc.*|kubelet|sshd|login|su|sudo|tini|dumb-init|cri-o|podman|<NA>)$/;
+const GENERIC = /^(sh|bash|dash|ash|ksh|zsh|csh|tcsh|python[\d.]*|perl.*|ruby.*|node|java|php.*|awk|gawk|mawk|sed|tr|grep|egrep|fgrep|cat|cut|sort|uniq|head|tail|wc|xargs|find|ls|stat|id|whoami|date|env|expr|test|basename|dirname|readlink|sleep|tee|df|du|ps|curl|wget)$/;
+const risk = n => INFRA.test(n) ? 'infra' : GENERIC.test(n) ? 'generic' : '';
+const fmt = n => n.toLocaleString('en-US');
+const rate = n => Math.round(n / secs).toLocaleString('en-US');
+const sel = new Set();
+const comms = D.comms.map((c, i) => Object.assign({i}, c));
+const peakIdx = D.total_sec.map((v, s) => [v, s]).sort((a, b) => b[0] - a[0]).slice(0, 3).map(x => x[1]);
+const peakTotal = peakIdx.reduce((a, s) => a + D.total_sec[s], 0);
+comms.forEach(c => { c.peak = peakIdx.reduce((a, s) => a + c.sec[s], 0); });
+
+const segs = D.segments || [{name: '', start_sec: D.start_sec, secs}];
+const labels = [];
+segs.forEach((g, k) => { for (let s = 0; s < g.secs; s++) labels.push(segs.length > 1 ? `#${k + 1} +${s}s` : `+${s}s`); });
+document.getElementById('meta').textContent =
+  `${fmt(total)} events over ${secs}s (${rate(total)}/s), ${comms.length} distinct processes, ` +
+  `${segs.length} capture${segs.length > 1 ? 's' : ''}, ` +
+  `first at ${new Date(D.start_sec * 1000).toISOString().replace('T', ' ').slice(0, 19)} UTC` +
+  (segs.length > 1 ? ' (captures laid end to end; #N = Nth file)' : '');
+document.getElementById('depth').textContent = D.depth;
+const notes = [];
+if (!comms.length) notes.push('No event in this capture has a known process, so there is nothing to skip.');
+if (D.chains_dropped_events) {
+  notes.push(`${fmt(D.chains_dropped_events)} events belong to rare ancestry chains that were dropped to bound the file; ` +
+    `selection totals ignore them.`);
+}
+document.getElementById('caveat').textContent = notes.join(' ');
+
+function removedPerSec() {
+  const out = new Array(secs).fill(0);
+  if (!sel.size) return out;
+  for (const ch of D.chains) {
+    if (ch.c.some(i => sel.has(i))) for (let s = 0; s < secs; s++) out[s] += ch.sec[s];
+  }
+  return out;
+}
+
+function draw() {
+  const rem = removedPerSec();
+  const kept = D.total_sec.map((v, s) => v - rem[s]);
+  const x = labels;
+  Plotly.react('chart', [
+    {x, y: kept, name: 'remaining', type: 'bar', marker: {color: '#94a3b8'}},
+    {x, y: rem, name: 'skipped', type: 'bar', marker: {color: '#ef4444'}},
+  ], {barmode: 'stack', margin: {t: 10, l: 60, r: 10, b: 40}, legend: {orientation: 'h', y: 1.1},
+      yaxis: {title: 'events / s'}}, {displayModeBar: false, responsive: true});
+
+  const gone = rem.reduce((a, b) => a + b, 0);
+  document.getElementById('pct').textContent = (100 * gone / total).toFixed(1) + '%';
+  document.getElementById('rate').textContent = `${rate(total)} → ${rate(total - gone)}`;
+  const names = [...sel].map(i => D.comms[i].comm);
+  document.getElementById('snippet').textContent = names.length
+    ? 'skip_events_by_process:\n' + names.map(n => '  - ' + n).join('\n') : '(nothing selected)';
+  const bad = names.filter(n => risk(n));
+  document.getElementById('warn').textContent = bad.length
+    ? `Selected entries ${bad.join(', ')} are infrastructure or shared names: review what they hide before applying.` : '';
+}
+
+function active(c) { return c.sec.filter(v => v > 0).length; }
+
+function buildTable() {
+  const tb = document.querySelector('#tbl tbody');
+  const max = comms.length ? comms[0].subtree : 1;
+  for (const c of comms) {
+    const r = risk(c.comm), a = active(c);
+    const tr = document.createElement('tr');
+    if (r) tr.className = r;
+    const cell = (txt, cls) => { const td = document.createElement('td'); if (cls) td.className = cls; td.textContent = txt; tr.appendChild(td); return td; };
+    const cb = document.createElement('input'); cb.type = 'checkbox';
+    cb.onchange = () => { cb.checked ? sel.add(c.i) : sel.delete(c.i); draw(); };
+    c.cb = cb;
+    tr.appendChild(document.createElement('td')).appendChild(cb);
+    const name = cell(c.comm);
+    if (r) { const b = document.createElement('span'); b.className = 'badge ' + r; b.textContent = r === 'infra' ? 'infra' : 'shared'; name.appendChild(b); }
+    cell(fmt(c.subtree), 'num');
+    cell((100 * c.subtree / total).toFixed(1) + '%', 'num');
+    cell(rate(c.subtree), 'num');
+    const barTd = document.createElement('td'); const bar = document.createElement('div');
+    bar.className = 'bar'; bar.style.width = (120 * c.subtree / max) + 'px'; barTd.appendChild(bar); tr.appendChild(barTd);
+    cell((100 * c.peak / peakTotal).toFixed(0) + '%', 'num');
+    cell((100 * c.self / c.subtree).toFixed(0) + '%', 'num');
+    const act = cell(`${a}/${secs}s`); const b2 = document.createElement('span');
+    const cont = a >= 0.7 * secs; b2.className = 'badge ' + (cont ? 'cont' : 'bursty'); b2.textContent = cont ? 'steady' : 'bursty'; act.appendChild(b2);
+    const ex = cell(c.cmdline || c.exe, 'cmd'); ex.title = `${c.exe}\n${c.cmdline}`;
+    tb.appendChild(tr);
+  }
+}
+
+function setSel(ids) {
+  sel.clear(); ids.forEach(i => sel.add(i));
+  comms.forEach(c => c.cb.checked = sel.has(c.i));
+  draw();
+}
+
+document.getElementById('clear').onclick = () => setSel([]);
+document.getElementById('copy').onclick = () => navigator.clipboard.writeText(document.getElementById('snippet').textContent);
+buildTable();
+draw();
+</script>
+</body>
+</html>

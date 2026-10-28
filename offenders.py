@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Find the processes that dominate a sysdig capture and evaluate skip_events_by_process lists.
 
+  offenders.py run     CAPTURE.scap [MORE.scap ...] -o report.html   # collect + report
   offenders.py collect CAPTURE.scap [MORE.scap ...] -o offenders.json
+  offenders.py report  offenders.json -o report.html
   offenders.py whatif  offenders.json --exclude comm1,comm2
 
 `collect` needs docker or podman and the sysdig/sysdig image; everything else is stdlib.
@@ -15,6 +17,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CHISEL = os.path.join(HERE, "chisels", "top_offenders.lua")
+TEMPLATE = os.path.join(HERE, "report", "template.html")
 IMAGE = os.environ.get("SYSDIG_IMAGE", "docker.io/sysdig/sysdig:latest")
 SCHEMA_VERSION = 2
 
@@ -191,6 +194,26 @@ def whatif(data, skip):
         print(f"  - {s}")
 
 
+def report(data_path, out, embed_plotly):
+    data = load(data_path)
+    with open(TEMPLATE) as fh:
+        html = fh.read()
+    if embed_plotly:
+        try:
+            import plotly.offline as po
+            plotly_tag = f"<script>{po.get_plotlyjs()}</script>"
+        except ImportError:
+            print("plotly not installed: using the CDN script tag (report needs internet)", file=sys.stderr)
+            embed_plotly = False
+    if not embed_plotly:
+        plotly_tag = '<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>'
+    payload = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
+    html = html.replace("__PLOTLY__", plotly_tag).replace("__DATA__", payload)
+    with open(out, "w") as fh:
+        fh.write(html)
+    print(f"wrote {out} ({os.path.getsize(out) / 1e6:.1f} MB)", file=sys.stderr)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -201,15 +224,33 @@ def main():
     p.add_argument("--depth", type=int, default=12, help="ancestor levels to walk")
     p.add_argument("--max-chains", type=int, default=5000)
 
+    p = sub.add_parser("report")
+    p.add_argument("json")
+    p.add_argument("-o", "--out", required=True)
+    p.add_argument("--no-embed", action="store_true", help="load plotly.js from a CDN")
+
     p = sub.add_parser("whatif")
     p.add_argument("json")
     p.add_argument("--exclude", required=True, help="comma-separated comm names")
 
+    p = sub.add_parser("run")
+    p.add_argument("scaps", nargs="+", metavar="scap")
+    p.add_argument("-o", "--out", required=True, help="report HTML path")
+    p.add_argument("--depth", type=int, default=12)
+    p.add_argument("--max-chains", type=int, default=5000)
+    p.add_argument("--no-embed", action="store_true")
+
     a = ap.parse_args()
     if a.cmd == "collect":
         collect(a.scaps, a.out, a.depth, a.max_chains)
-    else:
+    elif a.cmd == "report":
+        report(a.json, a.out, not a.no_embed)
+    elif a.cmd == "whatif":
         whatif(load(a.json), [s for s in a.exclude.split(",") if s])
+    else:
+        js = os.path.splitext(a.out)[0] + ".json"
+        collect(a.scaps, js, a.depth, a.max_chains)
+        report(js, a.out, not a.no_embed)
 
 
 if __name__ == "__main__":

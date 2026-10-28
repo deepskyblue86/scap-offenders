@@ -1,5 +1,8 @@
+import json
 import os
+import subprocess
 import sys
+import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -38,6 +41,16 @@ class WhatIf(unittest.TestCase):
 
     def test_chains_sum_to_events(self):
         self.assertEqual(sum(c["n"] for c in DATA["chains"]), DATA["events"])
+
+    def test_report_embeds_valid_json(self):
+        with tempfile.TemporaryDirectory() as d:
+            src, out = os.path.join(d, "o.json"), os.path.join(d, "r.html")
+            json.dump(DATA, open(src, "w"))
+            subprocess.run([sys.executable, os.path.join(ROOT, "offenders.py"), "report", src, "-o", out,
+                            "--no-embed"], check=True, capture_output=True)
+            html = open(out).read()
+            self.assertIn('"version":2', html)
+            self.assertNotIn("__DATA__", html)
 
 
 if __name__ == "__main__":
