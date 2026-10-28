@@ -65,6 +65,8 @@ __PLOTLY__
 
   <div class="card">
     <h2>Processes by subtree volume</h2>
+    <p>Default view: at least 1% of all events, or at least 10% in a rolling 10-second window with at least 10% of the busiest window's events. Short captures use their full duration; windows never cross captures.</p>
+    <p><span id="filter-status" aria-live="polite"></span> <button id="show-all" aria-pressed="false">Show all</button></p>
     <table id="tbl"><thead><tr>
       <th></th><th>comm</th><th class="num">events</th><th class="num">share</th><th class="num">/s</th>
       <th></th><th class="num" title="share of the 3 busiest seconds">peak</th><th class="num">self</th><th>active</th><th>example</th>
@@ -105,6 +107,28 @@ const peakTotal = peakIdx.reduce((a, s) => a + D.total_sec[s], 0);
 comms.forEach(c => { c.peak = peakIdx.reduce((a, s) => a + c.sec[s], 0); });
 
 const segs = D.segments || [{name: '', start_sec: D.start_sec, secs}];
+const windows = [];
+let segmentOffset = 0;
+for (const segment of segs) {
+  const size = Math.min(10, segment.secs);
+  if (size) {
+    let sum = 0;
+    for (let i = 0; i < segment.secs; i++) {
+      sum += D.total_sec[segmentOffset + i];
+      if (i >= size) sum -= D.total_sec[segmentOffset + i - size];
+      if (i >= size - 1) windows.push({start: segmentOffset + i + 1 - size, end: segmentOffset + i + 1, total: sum});
+    }
+  }
+  segmentOffset += segment.secs;
+}
+const busiestWindow = windows.reduce((max, w) => Math.max(max, w.total), 0);
+const qualifyingWindows = windows.filter(w => w.total > 0 && w.total * 10 >= busiestWindow);
+for (const c of comms) {
+  const prefix = [0];
+  for (const n of c.sec) prefix.push(prefix[prefix.length - 1] + n);
+  c.significant = c.subtree * 100 >= total || qualifyingWindows.some(w => (prefix[w.end] - prefix[w.start]) * 10 >= w.total);
+}
+let showAll = false;
 const labels = [];
 segs.forEach((g, k) => { for (let s = 0; s < g.secs; s++) labels.push(segs.length > 1 ? `#${k + 1} +${s}s` : `+${s}s`); });
 const tickIndices = new Set();
@@ -193,6 +217,7 @@ function draw() {
   const bad = names.filter(n => risk(n));
   document.getElementById('warn').textContent = bad.length
     ? `Selected entries ${bad.join(', ')} are infrastructure or shared names: review what they hide before applying.` : '';
+  updateFilter();
 }
 
 function active(c) { return c.sec.filter(v => v > 0).length; }
@@ -208,6 +233,7 @@ function buildTable() {
     const cb = document.createElement('input'); cb.type = 'checkbox';
     cb.onchange = () => { cb.checked ? sel.add(c.i) : sel.delete(c.i); draw(); };
     c.cb = cb;
+    c.row = tr;
     tr.appendChild(document.createElement('td')).appendChild(cb);
     const name = cell(c.comm);
     if (r) { const b = document.createElement('span'); b.className = 'badge ' + r; b.textContent = r === 'infra' ? 'infra' : 'shared'; name.appendChild(b); }
@@ -225,6 +251,18 @@ function buildTable() {
   }
 }
 
+function updateFilter() {
+  let hidden = 0;
+  for (const c of comms) {
+    c.row.hidden = !showAll && !c.significant && !sel.has(c.i);
+    if (c.row.hidden) hidden++;
+  }
+  document.getElementById('filter-status').textContent = `${hidden} process${hidden === 1 ? '' : 'es'} hidden`;
+  const button = document.getElementById('show-all');
+  button.textContent = showAll ? 'Show filtered' : 'Show all';
+  button.setAttribute('aria-pressed', String(showAll));
+}
+
 function setSel(ids) {
   sel.clear(); ids.forEach(i => sel.add(i));
   comms.forEach(c => c.cb.checked = sel.has(c.i));
@@ -232,6 +270,7 @@ function setSel(ids) {
 }
 
 document.getElementById('clear').onclick = () => setSel([]);
+document.getElementById('show-all').onclick = () => { showAll = !showAll; updateFilter(); };
 document.getElementById('copy').onclick = () => navigator.clipboard.writeText(document.getElementById('snippet').textContent);
 document.getElementById('process-select').onchange = drawProcess;
 buildTable();

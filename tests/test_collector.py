@@ -196,15 +196,65 @@ class Report(unittest.TestCase):
                         "--no-embed"], check=True, capture_output=True)
         return out
 
-    def smoke(self, data, comm=None, detail=None, next_selection=None):
+    def smoke(self, data, comm=None, detail=None, next_selection=None, filter_selection=None):
         args = ["node", SMOKE, self.render(data)]
-        if comm is not None or detail is not None or next_selection is not None:
+        if comm is not None or detail is not None or next_selection is not None or filter_selection is not None:
             args.append(comm or "")
-        if detail is not None or next_selection is not None:
+        if detail is not None or next_selection is not None or filter_selection is not None:
             args.append(detail or "")
-        if next_selection is not None:
-            args.append(next_selection)
+        if next_selection is not None or filter_selection is not None:
+            args.append(next_selection or "")
+        if filter_selection is not None:
+            args.append(filter_selection)
         return json.loads(subprocess.run(args, check=True, capture_output=True, text=True).stdout)
+
+    def filter_capture(self, totals, processes, lengths=None):
+        data = self.timeline(len(totals))
+        data.update(events=sum(totals), total_sec=totals,
+                    comms=[{"comm": name, "subtree": sum(values), "self": sum(values),
+                            "exe": "", "cmdline": "", "sec": values}
+                           for name, values in processes],
+                    chains=[{"c": [], "n": sum(totals), "sec": totals}])
+        if lengths is not None:
+            data["segments"] = [{"name": str(i), "start_sec": 100 + i * 1000, "secs": n}
+                                for i, n in enumerate(lengths)]
+        return data
+
+    def test_filter_global_and_local_boundaries_and_show_all_selection(self):
+        totals = [1000] * 100 + [100] * 10
+        data = self.filter_capture(totals, [
+            ("global", [10] * 99 + [20] + [0] * 10),
+            ("local", [0] * 100 + [10] * 10),
+            ("below", [0] * 100 + [9] * 10),
+        ])
+        r = self.smoke(data, filter_selection="below")
+        self.assertEqual(r["initialRows"], ["global", "local"])
+        self.assertIn("1", r["initialFilterStatus"])
+        self.assertEqual(r["allRows"], ["global", "local", "below"])
+        self.assertEqual(r["visibleRows"], ["global", "local", "below"])
+        self.assertIn("  - below", r["filteredSnippet"])
+        self.assertEqual(r["rowsAfterClear"], ["global", "local"])
+
+    def test_filter_excludes_global_share_just_below_one_percent(self):
+        data = self.filter_capture([1000] * 100, [
+            ("at", [10] * 100),
+            ("below", [10] * 99 + [9]),
+        ])
+        self.assertEqual(self.smoke(data)["initialRows"], ["at"])
+
+    def test_filter_activity_guard_short_segments_and_capture_boundaries(self):
+        totals = [1000] * 100 + [0] * 5 + [100] * 10 + [0] * 5 + [100] * 9 + [0] * 10
+        values = [0] * 105 + [10] * 10 + [0] * 5 + [10] * 9 + [0] * 10
+        data = self.filter_capture(totals, [("burst", values)], [100, 10, 10, 9, 10])
+        r = self.smoke(data)
+        self.assertEqual(r["initialRows"], [])
+
+        data["total_sec"][120:129] = [1000] + [0] * 8
+        data["events"] = sum(data["total_sec"])
+        data["chains"][0].update(n=data["events"], sec=data["total_sec"])
+        data["comms"][0].update(subtree=200, self=200, sec=[0] * 105 + [10] * 10 + [0] * 5 + [100] + [0] * 18)
+        r = self.smoke(data)
+        self.assertEqual(r["initialRows"], ["burst"])
 
     def test_selection_updates_totals_and_snippet(self):
         r = self.smoke(good_capture(), "a")

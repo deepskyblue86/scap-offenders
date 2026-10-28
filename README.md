@@ -53,6 +53,10 @@ capture. Review them before sharing or publishing.
 - `infra` rows (init, container runtimes, `su`, ...) and `shared` rows (shells, interpreters, common
   utilities) are flagged: skipping them hides a whole subtree, or every process of that name on the host.
 - Names are the kernel `comm` (15 characters), exactly what the agent matches.
+- The process table defaults to comms with at least 1% of all events or at least 10% of a rolling
+  10-second window. A window qualifies only if it contains at least 10% of the busiest window's
+  events. Windows stay within each capture; captures shorter than 10 seconds use their full duration.
+  Use **Show all** to inspect hidden comms. Selected comms remain visible when the filter is restored.
 
 These are estimates for the captured window, not a security review. Skipping a process also skips
 everything it spawns; use the `infra` and `shared` flags to spot names that can hide broad parts of

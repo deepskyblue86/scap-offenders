@@ -8,17 +8,18 @@ const els = {};
 const mk = () => ({
   style: {}, children: [], value: '', hidden: false,
   appendChild(c) { this.children.push(c); return c; },
+  setAttribute(name, value) { this[name] = value; },
   set textContent(v) { this._t = v; }, get textContent() { return this._t; },
   set innerHTML(v) { if (!v) { this.children = []; this.value = ''; } },
 });
-global.document = {getElementById: id => els[id] || (els[id] = mk()), querySelector: () => mk(), createElement: () => mk()};
+const tbody = mk();
+global.document = {getElementById: id => els[id] || (els[id] = mk()), querySelector: () => tbody, createElement: () => mk()};
 global.location = {hash: ''};
 global.navigator = {clipboard: {writeText() {}}};
 global.__plots = {};
 global.Plotly = {react: (id, traces, layout) => { global.__plots[id] = {traces, layout}; }};
 global.window = global;
 eval(code + `;
-comms.forEach(c => { c.cb = {checked: false}; });
 const wants = process.argv[3] ? process.argv[3].split(',') : [];
 const ids = wants.map(n => comms.findIndex(c => c.comm === n)).filter(i => i >= 0);
 if (ids.length) setSel(ids);
@@ -30,10 +31,36 @@ if (process.argv[5] !== undefined) {
   const next = process.argv[5] ? process.argv[5].split(',') : [];
   setSel(next.map(n => comms.findIndex(c => c.comm === n)).filter(i => i >= 0));
 }
+const visibleRows = () => tbody.children.filter(row => !row.hidden).map(row => row.children[1].textContent);
+const initialRows = visibleRows();
+const initialFilterStatus = els['filter-status']?.textContent;
+let allRows, rowsAfterClear;
+if (process.argv[6]) {
+  els['show-all'].onclick();
+  allRows = visibleRows();
+  for (const name of process.argv[6].split(',')) {
+    const c = comms.find(c => c.comm === name);
+    if (c) { c.cb.checked = true; c.cb.onchange(); }
+  }
+  els['show-all'].onclick();
+}
+const filteredRows = visibleRows();
+const filteredSnippet = els.snippet.textContent;
+if (process.argv[6]) {
+  els.clear.onclick();
+  rowsAfterClear = visibleRows();
+}
 const aggregate = global.__plots.chart;
 const detail = global.__plots['process-chart'];
 console.log(JSON.stringify({
   comms: comms.length,
+  initialRows,
+  initialFilterStatus,
+  allRows,
+  visibleRows: filteredRows,
+  rowsAfterClear,
+  filteredSnippet,
+  filterStatus: els['filter-status']?.textContent,
   pct: els.pct.textContent,
   rate: els.rate.textContent,
   snippet: els.snippet.textContent,
