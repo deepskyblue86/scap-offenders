@@ -13,7 +13,7 @@ const mk = () => ({
 global.document = {getElementById: id => els[id] || (els[id] = mk()), querySelector: () => mk(), createElement: () => mk()};
 global.location = {hash: ''};
 global.navigator = {clipboard: {writeText() {}}};
-global.Plotly = {react: (id, traces) => { global.__traces = traces; }};
+global.Plotly = {react: (id, traces, layout) => { global.__traces = traces; global.__layout = layout; }};
 global.window = global;
 eval(code + `;
 comms.forEach(c => { c.cb = {checked: false}; });
@@ -29,5 +29,6 @@ console.log(JSON.stringify({
   caveat: els.caveat.textContent || '',
   kept: global.__traces[0].y,
   skipped: global.__traces[1].y,
+  xTickvals: global.__layout.xaxis ? global.__layout.xaxis.tickvals : null,
 }));
 `);

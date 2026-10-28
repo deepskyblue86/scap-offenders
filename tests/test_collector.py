@@ -175,6 +175,17 @@ class Merge(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("node"), "node not installed")
 class Report(unittest.TestCase):
+    def timeline(self, secs, segments=None):
+        data = {
+            "version": 2, "depth": 12, "start_sec": 100, "end_sec": 99 + secs, "events": secs,
+            "total_sec": [1] * secs, "chains_total": 1, "chains_listed": 1,
+            "chains_dropped_events": 0, "comms": [],
+            "chains": [{"c": [], "n": secs, "sec": [1] * secs}],
+        }
+        if segments is not None:
+            data["segments"] = segments
+        return data
+
     def render(self, data):
         d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, d, ignore_errors=True)
@@ -203,6 +214,30 @@ class Report(unittest.TestCase):
         self.assertEqual(r["comms"], 0)
         self.assertEqual(r["kept"], [2])
         self.assertIn("nothing to skip", r["caveat"])
+
+    def test_chart_shows_each_tick_for_short_captures(self):
+        r = self.smoke(self.timeline(3))
+        self.assertEqual(r["xTickvals"], ["+0s", "+1s", "+2s"])
+
+    def test_chart_limits_ticks_and_keeps_endpoints_for_long_captures(self):
+        r = self.smoke(self.timeline(101))
+        self.assertIsNotNone(r["xTickvals"])
+        self.assertLessEqual(len(r["xTickvals"]), 12)
+        self.assertEqual(r["xTickvals"][0], "+0s")
+        self.assertEqual(r["xTickvals"][-1], "+100s")
+
+    def test_chart_keeps_capture_boundaries_in_tick_labels(self):
+        r = self.smoke(self.timeline(86, [
+            {"name": "first.scap", "start_sec": 100, "secs": 30},
+            {"name": "second.scap", "start_sec": 200, "secs": 34},
+            {"name": "third.scap", "start_sec": 300, "secs": 22},
+        ]))
+        self.assertIsNotNone(r["xTickvals"])
+        self.assertIn("#2 +0s", r["xTickvals"])
+        self.assertIn("#2 +8s", r["xTickvals"])
+        self.assertNotIn("#2 +2s", r["xTickvals"])
+        self.assertNotIn("#2 +32s", r["xTickvals"])
+        self.assertEqual(r["xTickvals"][-1], "#3 +21s")
 
 
 if __name__ == "__main__":

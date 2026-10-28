@@ -96,6 +96,20 @@ comms.forEach(c => { c.peak = peakIdx.reduce((a, s) => a + c.sec[s], 0); });
 const segs = D.segments || [{name: '', start_sec: D.start_sec, secs}];
 const labels = [];
 segs.forEach((g, k) => { for (let s = 0; s < g.secs; s++) labels.push(segs.length > 1 ? `#${k + 1} +${s}s` : `+${s}s`); });
+const tickIndices = new Set();
+if (secs) {
+  const step = Math.max(1, Math.ceil((secs - 1) / 11));
+  const minGap = Math.ceil(step / 2);
+  let offset = 0;
+  for (const g of segs) {
+    for (let s = 0; s < g.secs; s += step) {
+      if (s === 0 || g.secs - 1 - s >= minGap) tickIndices.add(offset + s);
+    }
+    offset += g.secs;
+  }
+  tickIndices.add(secs - 1);
+}
+const tickvals = [...tickIndices].sort((a, b) => a - b).map(s => labels[s]);
 document.getElementById('meta').textContent =
   `${fmt(total)} events over ${secs}s (${rate(total)}/s), ${comms.length} distinct processes, ` +
   `${segs.length} capture${segs.length > 1 ? 's' : ''}, ` +
@@ -127,6 +141,7 @@ function draw() {
     {x, y: kept, name: 'remaining', type: 'bar', marker: {color: '#94a3b8'}},
     {x, y: rem, name: 'skipped', type: 'bar', marker: {color: '#ef4444'}},
   ], {barmode: 'stack', margin: {t: 10, l: 60, r: 10, b: 40}, legend: {orientation: 'h', y: 1.1},
+      xaxis: {tickmode: 'array', tickvals, tickangle: 0, automargin: true},
       yaxis: {title: 'events / s'}}, {displayModeBar: false, responsive: true});
 
   const gone = rem.reduce((a, b) => a + b, 0);
