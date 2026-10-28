@@ -96,3 +96,7 @@ python3 -I -m unittest discover -s tests
 
 The collector tests use LuaJIT, and the report tests use Node.js. Tests for either runtime are
 skipped when that runtime is not installed.
+
+## License
+
+This project is licensed under the Apache License 2.0. See [`LICENSE`](LICENSE).
