@@ -8,22 +8,24 @@ effect of adding them to the agent's `skip_events_by_process` list.
 - Python 3.
 - `run` and `collect`: Docker or Podman. The default image is
   `docker.io/sysdig/sysdig:latest`; the runtime pulls it if it is not already available locally.
-- `report` and `whatif`: Python standard library. To make reports work offline, install Plotly in
-  the Python environment; otherwise the report loads Plotly.js from a CDN. `--no-embed` always
-  uses the CDN.
+- The core commands use only the Python standard library. Install `requirements.txt` to embed
+  Plotly.js in reports so they work offline. Without it, reports load Plotly.js from a CDN;
+  `--no-embed` always uses the CDN.
 
 Set `CONTAINER_RUNTIME` to `docker` or `podman` to choose a runtime explicitly. Set `SYSDIG_IMAGE`
 to use a different Sysdig image.
 
 ## Quick start
 
-```
-python3 offenders.py run capture.scap -o report.html
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+python offenders.py run capture.scap -o report.html
 ```
 
 This writes `report.html` and the adjacent `report.json`. Open the HTML report in a browser. For a
-self-contained report, install Plotly with `python3 -m pip install plotly` before running the
-command.
+self-contained report, run the command using the environment where `requirements.txt` was installed.
 
 Pass multiple captures from the same node and incident together to place them on one timeline:
 
