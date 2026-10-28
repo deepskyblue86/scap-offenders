@@ -50,7 +50,18 @@ __PLOTLY__
     <div id="warn" style="color:#9b1c1c;margin-top:8px"></div>
   </div>
 
-  <div class="card"><h2>Events per second</h2><div id="chart" style="height:340px"></div></div>
+  <div class="card">
+    <h2>Selection impact per second</h2>
+    <div>Skipped is the union of retained chains matching any selected process; each chain is counted once.</div>
+    <div id="chart" style="height:340px"></div>
+  </div>
+
+  <div class="card" id="process-detail" hidden>
+    <h2>Selected process subtree</h2>
+    <label for="process-select">Inspect process:</label> <select id="process-select"></select>
+    <div>Includes descendants. Subtrees can overlap and must not be added together. Subtree counts can include dropped chains; the selection impact above excludes them. Each chart uses its own scale.</div>
+    <div id="process-chart" style="height:260px"></div>
+  </div>
 
   <div class="card">
     <h2>Processes by subtree volume</h2>
@@ -65,7 +76,7 @@ __PLOTLY__
     <ul class="notes">
       <li><b>Events</b> counts a process and everything it spawned (up to <span id="depth"></span> ancestor levels), because
           <code>skip_events_by_process</code> also suppresses descendants. Subtrees overlap, so shares do not add up; the selection
-          total above is exact.</li>
+          total above counts each retained chain once.</li>
       <li>Names are the kernel <code>comm</code> (15 characters); they are what the agent matches.</li>
       <li><span class="badge infra">infra</span> init, container runtimes and similar parents: skipping one hides the whole subtree
           below it, which can be most of the node.</li>
@@ -133,16 +144,45 @@ function removedPerSec() {
   return out;
 }
 
+function drawProcess() {
+  const i = Number(document.getElementById('process-select').value);
+  const c = D.comms[i];
+  Plotly.react('process-chart', [
+    {x: labels, y: c.sec, name: `${c.comm} subtree`, type: 'bar', marker: {color: '#7c3aed'}},
+  ], {margin: {t: 10, l: 60, r: 10, b: 40},
+      xaxis: {tickmode: 'array', tickvals, tickangle: 0, automargin: true},
+      yaxis: {title: 'events / s'}}, {displayModeBar: false, responsive: true});
+}
+
+function updateProcessDetail() {
+  const panel = document.getElementById('process-detail');
+  const select = document.getElementById('process-select');
+  const previous = select.value;
+  const ids = [...sel].sort((a, b) => a - b);
+  panel.hidden = !ids.length;
+  select.innerHTML = '';
+  if (!ids.length) return;
+  for (const i of ids) {
+    const option = document.createElement('option');
+    option.value = String(i);
+    option.textContent = D.comms[i].comm;
+    select.appendChild(option);
+  }
+  select.value = previous !== '' && sel.has(Number(previous)) ? previous : String(ids[0]);
+  drawProcess();
+}
+
 function draw() {
   const rem = removedPerSec();
   const kept = D.total_sec.map((v, s) => v - rem[s]);
   const x = labels;
   Plotly.react('chart', [
-    {x, y: kept, name: 'remaining', type: 'bar', marker: {color: '#94a3b8'}},
-    {x, y: rem, name: 'skipped', type: 'bar', marker: {color: '#ef4444'}},
+    {x, y: kept, name: 'remaining', type: 'bar', marker: {color: '#3b82f6'}},
+    {x, y: rem, name: 'skipped', type: 'bar', marker: {color: '#d1d5db'}},
   ], {barmode: 'stack', margin: {t: 10, l: 60, r: 10, b: 40}, legend: {orientation: 'h', y: 1.1},
       xaxis: {tickmode: 'array', tickvals, tickangle: 0, automargin: true},
       yaxis: {title: 'events / s'}}, {displayModeBar: false, responsive: true});
+  updateProcessDetail();
 
   const gone = rem.reduce((a, b) => a + b, 0);
   document.getElementById('pct').textContent = (100 * gone / total).toFixed(1) + '%';
@@ -193,6 +233,7 @@ function setSel(ids) {
 
 document.getElementById('clear').onclick = () => setSel([]);
 document.getElementById('copy').onclick = () => navigator.clipboard.writeText(document.getElementById('snippet').textContent);
+document.getElementById('process-select').onchange = drawProcess;
 buildTable();
 draw();
 </script>

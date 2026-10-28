@@ -196,8 +196,14 @@ class Report(unittest.TestCase):
                         "--no-embed"], check=True, capture_output=True)
         return out
 
-    def smoke(self, data, comm=None):
-        args = ["node", SMOKE, self.render(data)] + ([comm] if comm else [])
+    def smoke(self, data, comm=None, detail=None, next_selection=None):
+        args = ["node", SMOKE, self.render(data)]
+        if comm is not None or detail is not None or next_selection is not None:
+            args.append(comm or "")
+        if detail is not None or next_selection is not None:
+            args.append(detail or "")
+        if next_selection is not None:
+            args.append(next_selection)
         return json.loads(subprocess.run(args, check=True, capture_output=True, text=True).stdout)
 
     def test_selection_updates_totals_and_snippet(self):
@@ -205,6 +211,85 @@ class Report(unittest.TestCase):
         self.assertEqual(r["pct"], "100.0%")
         self.assertIn("  - a", r["snippet"])
         self.assertEqual(r["kept"], [0, 0])
+        self.assertEqual(r["aggregateTraceCount"], 2)
+        self.assertEqual(r["aggregateColors"], ["#3b82f6", "#d1d5db"])
+        self.assertFalse(r["detailHidden"])
+        self.assertEqual(r["detailTraces"], [{"name": "a subtree", "y": [3, 1], "type": "bar", "color": "#7c3aed"}])
+        self.assertEqual(r["detailTickvals"], r["xTickvals"])
+
+    def test_no_selection_with_available_processes_hides_detail(self):
+        r = self.smoke(good_capture())
+        self.assertTrue(r["detailHidden"])
+        self.assertEqual(r["detailOptions"], [])
+        self.assertEqual(r["aggregateTraceCount"], 2)
+        self.assertEqual(r["skipped"], [0, 0])
+
+    def overlapping_capture(self):
+        data = {
+            "version": 2, "depth": 12, "start_sec": 100, "end_sec": 101, "events": 8,
+            "total_sec": [4, 4], "chains_total": 4, "chains_listed": 4,
+            "chains_dropped_events": 0,
+            "comms": [
+                {"comm": "parent", "subtree": 5, "self": 2, "exe": "/parent", "cmdline": "parent", "sec": [3, 2]},
+                {"comm": "child", "subtree": 3, "self": 3, "exe": "/child", "cmdline": "child", "sec": [2, 1]},
+                {"comm": "other", "subtree": 2, "self": 2, "exe": "/other", "cmdline": "other", "sec": [1, 1]},
+            ],
+            "chains": [
+                {"c": [1, 0], "n": 3, "sec": [2, 1]},
+                {"c": [0], "n": 2, "sec": [1, 1]},
+                {"c": [2], "n": 2, "sec": [1, 1]},
+                {"c": [], "n": 1, "sec": [0, 1]},
+            ],
+        }
+        return data
+
+    def test_overlapping_selections_have_individual_detail_and_exact_union_bars(self):
+        r = self.smoke(self.overlapping_capture(), "parent,child", "child")
+        self.assertEqual(r["skipped"], [3, 2])
+        self.assertEqual(r["kept"], [1, 2])
+        self.assertEqual(r["aggregateTraceCount"], 2)
+        self.assertEqual([o["name"] for o in r["detailOptions"]], ["parent", "child"])
+        self.assertEqual(r["detailTraces"], [{"name": "child subtree", "y": [2, 1], "type": "bar", "color": "#7c3aed"}])
+
+    def test_disjoint_selections_and_detail_selection_changes(self):
+        data = self.overlapping_capture()
+        r = self.smoke(data, "parent,other", "other")
+        self.assertEqual(r["skipped"], [4, 3])
+        self.assertEqual(r["detailTraces"][0]["name"], "other subtree")
+        r = self.smoke(data, "parent,child", "child", "parent,child,other")
+        self.assertEqual(r["detailTraces"][0]["name"], "child subtree")
+        r = self.smoke(data, "parent,child", "child", "parent")
+        self.assertEqual(r["detailTraces"][0]["name"], "parent subtree")
+        r = self.smoke(data, "parent,child", "child", "")
+        self.assertTrue(r["detailHidden"])
+        self.assertEqual(r["skipped"], [0, 0])
+
+    def test_large_selection_keeps_detail_to_one_trace(self):
+        count = 30
+        data = {
+            "version": 2, "depth": 12, "start_sec": 100, "end_sec": 101, "events": count * 2,
+            "total_sec": [count, count], "chains_total": count, "chains_listed": count,
+            "chains_dropped_events": 0,
+            "comms": [{"comm": f"p{i}", "subtree": 2, "self": 2, "exe": "", "cmdline": "", "sec": [1, 1]}
+                      for i in range(count)],
+            "chains": [{"c": [i], "n": 2, "sec": [1, 1]} for i in range(count)],
+        }
+        r = self.smoke(data, ",".join(f"p{i}" for i in range(count)), "p29")
+        self.assertEqual(r["skipped"], [count, count])
+        self.assertEqual(len(r["detailOptions"]), count)
+        self.assertEqual(r["detailTraces"], [{"name": "p29 subtree", "y": [1, 1], "type": "bar", "color": "#7c3aed"}])
+
+    def test_dropped_chains_can_make_subtree_larger_than_selection_impact(self):
+        data = self.overlapping_capture()
+        data["events"] = 9
+        data["total_sec"] = [5, 4]
+        data["chains_total"] = 5
+        data["chains_dropped_events"] = 1
+        data["comms"][0].update(subtree=6, sec=[4, 2])
+        r = self.smoke(data, "parent")
+        self.assertEqual(r["skipped"], [3, 2])
+        self.assertEqual(r["detailTraces"][0]["y"], [4, 2])
+        self.assertIn("selection totals ignore them", r["caveat"])
 
     def test_report_renders_when_no_event_has_a_known_process(self):
         data = {"version": 2, "depth": 12, "start_sec": 1, "end_sec": 1, "events": 2, "total_sec": [2],
@@ -213,6 +298,8 @@ class Report(unittest.TestCase):
         r = self.smoke(data)
         self.assertEqual(r["comms"], 0)
         self.assertEqual(r["kept"], [2])
+        self.assertTrue(r["detailHidden"])
+        self.assertEqual(r["detailTraces"], [])
         self.assertIn("nothing to skip", r["caveat"])
 
     def test_chart_shows_each_tick_for_short_captures(self):
@@ -227,17 +314,21 @@ class Report(unittest.TestCase):
         self.assertEqual(r["xTickvals"][-1], "+100s")
 
     def test_chart_keeps_capture_boundaries_in_tick_labels(self):
-        r = self.smoke(self.timeline(86, [
+        data = self.timeline(86, [
             {"name": "first.scap", "start_sec": 100, "secs": 30},
             {"name": "second.scap", "start_sec": 200, "secs": 34},
             {"name": "third.scap", "start_sec": 300, "secs": 22},
-        ]))
+        ])
+        data["comms"] = [{"comm": "a", "subtree": 86, "self": 86, "exe": "", "cmdline": "", "sec": [1] * 86}]
+        data["chains"][0]["c"] = [0]
+        r = self.smoke(data, "a")
         self.assertIsNotNone(r["xTickvals"])
         self.assertIn("#2 +0s", r["xTickvals"])
         self.assertIn("#2 +8s", r["xTickvals"])
         self.assertNotIn("#2 +2s", r["xTickvals"])
         self.assertNotIn("#2 +32s", r["xTickvals"])
         self.assertEqual(r["xTickvals"][-1], "#3 +21s")
+        self.assertEqual(r["detailTickvals"], r["xTickvals"])
 
 
 if __name__ == "__main__":
